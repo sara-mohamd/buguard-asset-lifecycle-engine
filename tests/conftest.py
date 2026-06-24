@@ -18,6 +18,12 @@ async def engine():
     yield engine
     await engine.dispose()
 
+@pytest_asyncio.fixture
+async def db_session(engine):
+    AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with AsyncSessionLocal() as session:
+        yield session
+
 @pytest_asyncio.fixture(autouse=True)
 async def clear_database(engine):
     """

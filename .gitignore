@@ -63,3 +63,6 @@ htmlcov/
 temp-errors/
 scratch/
 
+# Learning Workspace
+learning/
+

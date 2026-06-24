@@ -1,12 +1,28 @@
 import uuid
 from datetime import datetime, timezone
+from typing import List, Tuple, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import or_, and_, insert, update
 
-from src.models.asset import Asset
+from src.models.asset import Asset, AssetStatus
 from src.schemas.asset import AssetCreate
 from src.exceptions import AssetNotFoundError, AssetDuplicateError
+
+def deep_merge_dicts(existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Deeply merges incoming into existing.
+    If both values are dicts, it recurses.
+    Otherwise, incoming overrides existing.
+    """
+    merged = dict(existing)
+    for key, value in incoming.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = deep_merge_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 async def create_asset(db: AsyncSession, asset_in: AssetCreate) -> Asset:
     """
@@ -52,3 +68,85 @@ async def get_asset(db: AsyncSession, asset_id: uuid.UUID) -> Asset:
         raise AssetNotFoundError(str(asset_id))
         
     return asset
+
+async def bulk_import_assets(db: AsyncSession, valid_assets: List[AssetCreate]) -> Tuple[int, int]:
+    """
+    Idempotent bulk ingestion engine.
+    Uses SQLAlchemy Core for high-performance batch operations.
+    Returns (created_count, updated_count).
+    """
+    if not valid_assets:
+        return 0, 0
+        
+    # Gather types and values to check for existing records
+    identities = []
+    asset_map = {}
+    for a in valid_assets:
+        a_type = a.type if isinstance(a.type, str) else a.type.value
+        a_value = str(a.value)
+        identities.append((a_type, a_value))
+        # Keep the last incoming version if duplicates exist in the same batch
+        asset_map[(a_type, a_value)] = a
+
+    # Fetch existing using Core select
+    conditions = [and_(Asset.type == t, Asset.value == v) for t, v in identities]
+    
+    query = select(
+        Asset.id, Asset.type, Asset.value, Asset.status, Asset.tags, Asset.metadata_
+    ).where(or_(*conditions))
+    
+    result = await db.execute(query)
+    existing_records = result.all()
+    
+    existing_map = {(r.type, r.value): r for r in existing_records}
+    
+    insert_data = []
+    update_data = []
+    now = datetime.now(timezone.utc)
+    
+    for (a_type, a_value), asset_in in asset_map.items():
+        if (a_type, a_value) in existing_map:
+            # Update existing
+            existing = existing_map[(a_type, a_value)]
+            
+            new_status = AssetStatus.active.value if existing.status == AssetStatus.stale.value else existing.status
+            
+            normalized_tags = {tag.strip().lower() for tag in asset_in.tags if tag.strip()}
+            merged_tags = list(set(existing.tags) | normalized_tags)
+            
+            merged_metadata = deep_merge_dicts(existing.metadata_, asset_in.metadata)
+            
+            update_data.append({
+                "id": existing.id,
+                "status": new_status,
+                "last_seen": now,
+                "tags": merged_tags,
+                "metadata_": merged_metadata
+            })
+        else:
+            # Create new
+            normalized_tags = list({tag.strip().lower() for tag in asset_in.tags if tag.strip()})
+            asset_status = asset_in.status if isinstance(asset_in.status, str) else asset_in.status.value
+            insert_data.append({
+                "id": uuid.uuid4(),
+                "type": a_type,
+                "value": a_value,
+                "status": asset_status,
+                "source": asset_in.source,
+                "tags": normalized_tags,
+                "metadata_": asset_in.metadata,
+                "first_seen": now,
+                "last_seen": now
+            })
+            
+    # Execute batch operations
+    if insert_data:
+        await db.execute(insert(Asset), insert_data)
+        
+    if update_data:
+        await db.execute(update(Asset), update_data)
+        
+    if insert_data or update_data:
+        await db.commit()
+        
+    return len(insert_data), len(update_data)
