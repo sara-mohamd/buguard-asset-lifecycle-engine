@@ -10,6 +10,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from src.database import Base, DATABASE_URL
+import src.models  # Ensure models are imported for metadata
 
 from alembic import context
 
