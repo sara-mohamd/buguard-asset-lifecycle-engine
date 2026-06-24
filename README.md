@@ -18,6 +18,7 @@ We implemented a single polymorphic `assets` table combined with a single self-r
 ### High-Performance Ingestion: SQLAlchemy Core Batching
 The batch ingestion engine (`bulk_import_assets`) entirely avoids SQLAlchemy ORM state tracking inside its loop, relying instead on lightweight column selection and SQLAlchemy Core batch execution.
 * **The "Why"**: Instantiating thousands of tracked ORM objects causes severe memory bloat and results in the N+1 problem (where SQLAlchemy emits individual row-by-row `UPDATE` statements). By mapping primitive columns into a lookup dictionary and executing bulk `insert(Asset)` and `update(Asset)` mappings, we execute high-performance batched database roundtrips, eliminating memory exhaustion and connection pool choking.
+* 📊 **[View Architecture Deep-Dive & Flowchart](docs/architecture/bulk_import_optimization.html)**
 
 ### Application-Layer Deep Merge: Python over PL/pgSQL
 The recursive JSONB metadata deep-merging and tag set-unions are executed purely in Python memory prior to database insertion, rather than relying on native PL/pgSQL.

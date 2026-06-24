@@ -1,10 +1,10 @@
 import uuid
 from datetime import datetime, timezone
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import or_, and_, insert, update
+from sqlalchemy import or_, and_, insert, update, func
 
 from src.models.asset import Asset, AssetStatus
 from src.schemas.asset import AssetCreate
@@ -68,6 +68,50 @@ async def get_asset(db: AsyncSession, asset_id: uuid.UUID) -> Asset:
         raise AssetNotFoundError(str(asset_id))
         
     return asset
+
+async def list_assets(
+    db: AsyncSession,
+    limit: int = 100,
+    offset: int = 0,
+    type_: Optional[str] = None,
+    status: Optional[str] = None,
+    tag: Optional[str] = None,
+    value: Optional[str] = None
+) -> Tuple[List[Asset], int]:
+    """
+    List assets with pagination and advanced filtering.
+    Returns a tuple of (items, total_count).
+    """
+    conditions = []
+    if type_:
+        conditions.append(Asset.type == type_)
+    if status:
+        conditions.append(Asset.status == status)
+    if tag:
+        conditions.append(Asset.tags.any(tag))
+    if value:
+        conditions.append(Asset.value.ilike(f"%{value}%"))
+
+    # Build base where clause
+    where_clause = and_(*conditions) if conditions else None
+
+    # Count query
+    count_query = select(func.count(Asset.id))
+    if where_clause is not None:
+        count_query = count_query.where(where_clause)
+    
+    total = await db.scalar(count_query) or 0
+
+    # Data query
+    query = select(Asset)
+    if where_clause is not None:
+        query = query.where(where_clause)
+    
+    query = query.order_by(Asset.first_seen.desc()).limit(limit).offset(offset)
+    result = await db.execute(query)
+    items = result.scalars().all()
+
+    return list(items), total
 
 async def bulk_import_assets(db: AsyncSession, valid_assets: List[AssetCreate]) -> Tuple[int, int]:
     """
