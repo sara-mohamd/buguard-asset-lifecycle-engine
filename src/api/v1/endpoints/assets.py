@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import TypeAdapter, ValidationError
 from src.database import get_db
 from src.schemas.asset import AssetCreate, AssetResponse, PaginatedAssetResponse
+from src.schemas.relationship import AssetWithNeighborsResponse
 from src.schemas.import_report import ImportReport, RejectedRecord
 from src.services import asset as asset_service
 from src.exceptions import AssetNotFoundError, AssetDuplicateError
@@ -54,6 +55,17 @@ async def get_asset(asset_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     try:
         asset = await asset_service.get_asset(db=db, asset_id=asset_id)
         return asset
+    except AssetNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+@router.get("/{asset_id}/relationships", response_model=AssetWithNeighborsResponse)
+async def get_asset_relationships(asset_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """
+    Retrieve an asset along with its first-degree graph neighbors.
+    """
+    try:
+        data = await asset_service.get_asset_with_neighbors(db=db, asset_id=asset_id)
+        return data
     except AssetNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 

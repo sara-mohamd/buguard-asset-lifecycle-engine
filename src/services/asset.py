@@ -6,8 +6,9 @@ from sqlalchemy.future import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import or_, and_, insert, update, func
 
-from src.models.asset import Asset, AssetStatus
+from src.models.asset import Asset, AssetStatus, AssetRelationship
 from src.schemas.asset import AssetCreate
+from src.schemas.relationship import RelationshipCreate
 from src.exceptions import AssetNotFoundError, AssetDuplicateError
 
 def deep_merge_dicts(existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
@@ -194,3 +195,87 @@ async def bulk_import_assets(db: AsyncSession, valid_assets: List[AssetCreate]) 
         await db.commit()
         
     return len(insert_data), len(update_data)
+
+async def create_relationship(db: AsyncSession, rel_in: RelationshipCreate) -> AssetRelationship:
+    """
+    Creates a new relationship between two assets.
+    """
+    source_asset = await db.get(Asset, rel_in.source_asset_id)
+    target_asset = await db.get(Asset, rel_in.target_asset_id)
+    if not source_asset:
+        raise AssetNotFoundError(str(rel_in.source_asset_id))
+    if not target_asset:
+        raise AssetNotFoundError(str(rel_in.target_asset_id))
+
+    query = select(AssetRelationship).where(
+        and_(
+            AssetRelationship.source_asset_id == rel_in.source_asset_id,
+            AssetRelationship.target_asset_id == rel_in.target_asset_id,
+            AssetRelationship.type == rel_in.type
+        )
+    )
+    result = await db.execute(query)
+    existing = result.scalar_one_or_none()
+    
+    if existing:
+        return existing
+        
+    relationship = AssetRelationship(
+        source_asset_id=rel_in.source_asset_id,
+        target_asset_id=rel_in.target_asset_id,
+        type=rel_in.type,
+        first_seen=datetime.now(timezone.utc)
+    )
+    
+    db.add(relationship)
+    await db.commit()
+    await db.refresh(relationship)
+    return relationship
+
+async def get_asset_with_neighbors(db: AsyncSession, asset_id: uuid.UUID) -> dict:
+    """
+    Retrieves an asset along with its first-degree graph neighbors.
+    Returns a dictionary suitable for AssetWithNeighborsResponse.
+    """
+    asset = await get_asset(db, asset_id)
+    
+    outbound_query = select(AssetRelationship, Asset).join(
+        Asset, AssetRelationship.target_asset_id == Asset.id
+    ).where(AssetRelationship.source_asset_id == asset_id)
+    outbound_result = await db.execute(outbound_query)
+    outbound_records = outbound_result.all()
+    
+    inbound_query = select(AssetRelationship, Asset).join(
+        Asset, AssetRelationship.source_asset_id == Asset.id
+    ).where(AssetRelationship.target_asset_id == asset_id)
+    inbound_result = await db.execute(inbound_query)
+    inbound_records = inbound_result.all()
+    
+    neighbors = []
+    
+    for rel, target_asset in outbound_records:
+        neighbors.append({
+            "asset": target_asset,
+            "relationship_type": rel.type,
+            "direction": "outbound"
+        })
+        
+    for rel, source_asset in inbound_records:
+        neighbors.append({
+            "asset": source_asset,
+            "relationship_type": rel.type,
+            "direction": "inbound"
+        })
+        
+    return {
+        "id": asset.id,
+        "type": asset.type,
+        "value": asset.value,
+        "status": asset.status,
+        "source": asset.source,
+        "tags": asset.tags,
+        "metadata": asset.metadata_,
+        "first_seen": asset.first_seen,
+        "last_seen": asset.last_seen,
+        "neighbors": neighbors
+    }
