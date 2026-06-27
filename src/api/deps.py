@@ -1,4 +1,5 @@
 from fastapi import Depends, HTTPException, status
+import hmac
 from fastapi.security import APIKeyHeader
 from src.config import get_settings, Settings
 
@@ -11,7 +12,13 @@ def verify_api_key(
     """
     Validate the incoming X-API-Key header against the configured API_KEY.
     """
-    if not api_key or api_key != settings.api_key:
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API Key",
+        )
+    # Constant-time comparison prevents timing-oracle attacks
+    if not hmac.compare_digest(api_key.encode("utf-8"), settings.api_key.encode("utf-8")):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API Key",

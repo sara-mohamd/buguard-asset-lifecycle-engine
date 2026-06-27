@@ -70,6 +70,15 @@ async def get_asset(db: AsyncSession, asset_id: uuid.UUID) -> Asset:
         
     return asset
 
+def _escape_ilike(value: str) -> str:
+    """Escape SQL ILIKE wildcard metacharacters."""
+    return (
+        value
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+
 async def list_assets(
     db: AsyncSession,
     limit: int = 100,
@@ -91,7 +100,8 @@ async def list_assets(
     if tag:
         conditions.append(Asset.tags.any(tag))
     if value:
-        conditions.append(Asset.value.ilike(f"%{value}%"))
+        escaped = _escape_ilike(value)
+        conditions.append(Asset.value.ilike(f"%{escaped}%", escape="\\"))
 
     # Build base where clause
     where_clause = and_(*conditions) if conditions else None
