@@ -153,11 +153,11 @@ Every asset captures the following fields:
 ```mermaid
 stateDiagram-v2
     [*] --> Active : Asset first ingested
-    Active --> Stale : Admin action / Discovery absence
+    Active --> Stale : Admin action or discovery absence
     Stale --> Active : Re-sighted in import batch
     Active --> Archived : Admin action
     Stale --> Archived : Admin action
-    Archived --> [*] : Historical record (preserved)
+    Archived --> [*] : Historical record preserved
 ```
 
 - **Active** → Verified and currently discoverable
@@ -170,12 +170,12 @@ The asset landscape is modeled as a **directed graph** `G = (V, E)` where assets
 
 ```mermaid
 graph LR
-    D["🌐 Domain<br/>example.com"] --> S1["📡 Subdomain<br/>api.example.com"]
-    D --> S2["📡 Subdomain<br/>mail.example.com"]
-    S1 --> IP1["🖥️ IP Address<br/>203.0.113.10"]
-    IP1 --> SVC["⚙️ Service<br/>443/tcp"]
-    CERT["🔒 Certificate<br/>CN=api.example.com"] --> S1
-    TECH["💻 Technology<br/>nginx/1.21"] --> SVC
+    D[Domain - example.com] --> S1[Subdomain - api.example.com]
+    D --> S2[Subdomain - mail.example.com]
+    S1 --> IP1[IP Address - 203.0.113.10]
+    IP1 --> SVC[Service - 443 tcp]
+    CERT[Certificate - CN api.example.com] --> S1
+    TECH[Technology - nginx 1.21] --> SVC
 ```
 
 **Supported edge patterns:**
@@ -277,19 +277,19 @@ Traditional ORM-based ingestion for batches of 1,000+ assets suffers from:
 
 ```mermaid
 graph TD
-    A[Incoming Payload <br/> 1000 Assets] --> B{1. Core Fetch}
-    B -->|select id, type, value...| C[(PostgreSQL DB)]
+    A[Incoming Payload - 1000 Assets] --> B{1. Core Fetch}
+    B -->|select id, type, value| C[(PostgreSQL DB)]
     C -->|Returns 400 Existing Records| D[2. Dictionary Mapping]
     D --> E[In-Memory Loop]
     E --> F{Exists in DB?}
-    F -->|Yes 400 records| G[3a. Update Path]
-    G -->|Deep Merge JSON<br/>Union Tags<br/>Set Stale to Active| I[update_data List]
-    F -->|No 600 records| H[3b. Insert Path]
-    H -->|Generate UUIDs<br/>Set first_seen| J[insert_data List]
+    F -->|Yes - 400 records| G[3a. Update Path]
+    G -->|Deep Merge JSON + Union Tags + Stale to Active| I[update_data List]
+    F -->|No - 600 records| H[3b. Insert Path]
+    H -->|Generate UUIDs + Set first_seen| J[insert_data List]
     I --> K[4. Batch Execute]
     J --> K
-    K -->|db.execute insert| C
-    K -->|db.execute update| C
+    K -->|execute insert| C
+    K -->|execute update| C
 ```
 
 ### Execution Stages
