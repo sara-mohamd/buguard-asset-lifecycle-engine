@@ -9,6 +9,7 @@ from src.schemas.relationship import AssetWithNeighborsResponse
 from src.schemas.import_report import ImportReport, RejectedRecord
 from src.services import asset as asset_service
 from src.exceptions import AssetNotFoundError, AssetDuplicateError
+from src.api.deps import verify_api_key
 
 router = APIRouter()
 
@@ -36,7 +37,7 @@ async def list_assets(
     )
     return PaginatedAssetResponse(items=items, total=total)
 
-@router.post("/", response_model=AssetResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=AssetResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(verify_api_key)])
 async def create_asset(asset_in: AssetCreate, db: AsyncSession = Depends(get_db)):
     """
     Create a new asset.
@@ -69,7 +70,7 @@ async def get_asset_relationships(asset_id: uuid.UUID, db: AsyncSession = Depend
     except AssetNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
-@router.post("/import", response_model=ImportReport, status_code=status.HTTP_200_OK)
+@router.post("/import", response_model=ImportReport, status_code=status.HTTP_200_OK, dependencies=[Depends(verify_api_key)])
 async def import_assets(payload: List[Dict[str, Any]], db: AsyncSession = Depends(get_db)):
     """
     Idempotent bulk ingestion endpoint.

@@ -23,6 +23,7 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://user:password@db:5432/asset_db
+      API_KEY: ${API_KEY:-buguard_eval_api_key_2026}
     depends_on:
       db:
         condition: service_healthy

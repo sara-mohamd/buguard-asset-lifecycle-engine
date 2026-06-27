@@ -4,10 +4,11 @@ from src.database import get_db
 from src.schemas.relationship import RelationshipCreate, RelationshipResponse
 from src.services import asset as asset_service
 from src.exceptions import AssetNotFoundError
+from src.api.deps import verify_api_key
 
 router = APIRouter()
 
-@router.post("/", response_model=RelationshipResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=RelationshipResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(verify_api_key)])
 async def create_relationship(rel_in: RelationshipCreate, db: AsyncSession = Depends(get_db)):
     """
     Create a new relationship between two assets.

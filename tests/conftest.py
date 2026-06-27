@@ -55,6 +55,23 @@ async def client(engine):
             
     app.dependency_overrides[get_db] = override_get_db
     
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers={"X-API-Key": get_settings().api_key}) as ac:
+        yield ac
+        
+    app.dependency_overrides.clear()
+
+@pytest_asyncio.fixture
+async def unauth_client(engine):
+    AsyncSessionLocal = sessionmaker(
+        bind=engine, class_=AsyncSession, expire_on_commit=False
+    )
+    
+    async def override_get_db():
+        async with AsyncSessionLocal() as session:
+            yield session
+            
+    app.dependency_overrides[get_db] = override_get_db
+    
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
         
