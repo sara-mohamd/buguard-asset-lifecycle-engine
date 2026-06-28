@@ -146,12 +146,10 @@ async def bulk_import_assets(db: AsyncSession, valid_assets: List[AssetCreate]) 
     # Fetch existing using Core select
     conditions = [and_(Asset.type == t, Asset.value == v) for t, v in identities]
     
-    query = select(
-        Asset.id, Asset.type, Asset.value, Asset.status, Asset.tags, Asset.metadata_
-    ).where(or_(*conditions))
+    query = select(Asset).where(or_(*conditions))
     
     result = await db.execute(query)
-    existing_records = result.all()
+    existing_records = result.scalars().all()
     
     existing_map = {(r.type, r.value): r for r in existing_records}
     
@@ -173,6 +171,10 @@ async def bulk_import_assets(db: AsyncSession, valid_assets: List[AssetCreate]) 
             
             update_data.append({
                 "id": existing.id,
+                "type": existing.type,
+                "value": existing.value,
+                "source": existing.source,
+                "first_seen": existing.first_seen,
                 "status": new_status,
                 "last_seen": now,
                 "tags": merged_tags,
@@ -199,7 +201,18 @@ async def bulk_import_assets(db: AsyncSession, valid_assets: List[AssetCreate]) 
         await db.execute(insert(Asset), insert_data)
         
     if update_data:
-        await db.execute(update(Asset), update_data)
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        stmt = pg_insert(Asset).values(update_data)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["id"],
+            set_={
+                "status": stmt.excluded.status,
+                "last_seen": stmt.excluded.last_seen,
+                "tags": stmt.excluded.tags,
+                "metadata": stmt.excluded.metadata,
+            },
+        )
+        await db.execute(stmt)
         
     if insert_data or update_data:
         await db.commit()
