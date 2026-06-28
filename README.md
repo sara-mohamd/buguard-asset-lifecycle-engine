@@ -62,6 +62,9 @@ The following capabilities have been fully built, tested, and merged — each ma
 | **Asset Listing, Filtering & Pagination** — `GET /assets` with limit/offset, filter by type, status, tag, value substring | [#5](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/5) | ✅ Done |
 | **Relationships Directed Graph** — `asset_relationships` table, create relationship endpoint, first-degree neighbor traversal | [#6](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/6) | ✅ Done |
 | **API Key Authentication** — Stateless M2M `X-API-Key` verification on all write endpoints | [#7](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/7) | ✅ Done |
+| **Security Hardening** — Constant-time API key comparison (`hmac.compare_digest`), ILIKE wildcard escaping, health endpoint error suppression | [#9](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/9) | ✅ Done |
+| **Database Optimization** — Indexes on `status`, `tags` (GIN), composite `(type, value)`, relationship FKs; batch `ON CONFLICT DO UPDATE` for bulk imports | [#11](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/11) | ✅ Done |
+| **Asset Update & Delete API** — `PUT /api/v1/assets/{id}` for field updates & soft-delete, `DELETE /api/v1/assets/{id}` for hard deletion, archived-asset filtering in graph views | [#12](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/12) | ✅ Done |
 
 ---
 
@@ -201,7 +204,9 @@ graph LR
 | `GET` | `/api/v1/assets/` | — | List assets with pagination & filtering |
 | `POST` | `/api/v1/assets/` | 🔑 | Create a single asset |
 | `GET` | `/api/v1/assets/{id}` | — | Retrieve asset by UUID |
-| `GET` | `/api/v1/assets/{id}/relationships` | — | Asset + first-degree graph neighbors |
+| `PUT` | `/api/v1/assets/{id}` | 🔑 | Update asset fields (soft-delete via `status=archived`) |
+| `DELETE` | `/api/v1/assets/{id}` | 🔑 | Hard-delete asset (cascades relationship cleanup) |
+| `GET` | `/api/v1/assets/{id}/relationships` | — | Asset + first-degree graph neighbors (excludes archived) |
 | `POST` | `/api/v1/assets/import` | 🔑 | Idempotent bulk ingestion |
 
 ### Relationships
@@ -447,50 +452,61 @@ All tests use `httpx.AsyncClient` against the real FastAPI app with a real Postg
 
 ## Assumptions
 
+Each assumption below includes its **current implementation status** — whether it is fully realized in code, partially addressed, or planned for a future iteration.
+
 1. **Authentication Model:** The API uses a single static `API_KEY` (machine-to-machine) rather than a multi-user JWT system, assuming the primary client is an automated scanner.
+   - ✅ **Implemented.** Stateless `X-API-Key` verification via `hmac.compare_digest` (constant-time) on all write endpoints. Security-hardened in [#9](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/9).
+   - 🔜 **Evolution planned:** Multi-tenant RBAC with database-backed API keys (`admin`/`scanner`/`viewer` roles) is tracked in [#15](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/15).
 
 2. **Data Merge Strategy:** When conflicting data arrives for an existing asset, the **newer metadata takes precedence** via a key-value override protocol. For nested structures, a recursive deep merge preserves non-overlapping keys at all levels.
+   - ✅ **Implemented.** The `deep_merge_dicts()` function performs recursive JSON merging. Tag collections use set-union semantics. Both are exercised in the bulk import engine ([#4](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/4)).
+   - 🔜 **Evolution planned:** Source-aware merging with a `seen_by` metadata array is tracked in [#16](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/16).
 
 3. **Soft Deletion / Lifecycle:** Assets are tracked via `status` (active, stale, archived) and are never permanently deleted, assuming historical visibility is critical for security auditing.
+   - ✅ **Implemented:** The `PUT /api/v1/assets/{id}` endpoint supports soft-deletion by updating status to `archived`. A separate `DELETE /api/v1/assets/{id}` endpoint provides hard-delete with cascading relationship cleanup for cases where physical removal is needed ([#12](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/12)). Graph neighbor queries automatically exclude archived assets.
 
 4. **Composite Identity:** An asset's unique identity is its `(type, value)` pair, not any external ID from the incoming payload.
+   - ✅ **Implemented:** Enforced at the database level via a `UNIQUE` constraint on `(type, value)`. The bulk import engine uses this composite key for deduplication. A dedicated composite index (`ix_assets_type_value`) was added in [#11](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/11) for optimized lookups.
 
 5. **Tag Normalization:** Tags are lowercased, stripped of whitespace, and deduplicated on ingestion to ensure consistent filtering.
+   - ✅ **Implemented:** Applied in both `create_asset()` and `bulk_import_assets()`. A GIN index on the `tags` column (added in [#11](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/11)) enables fast array-membership filtering.
 
 6. **Single-Batch Dedup:** If the same asset appears multiple times within a single import batch, only the last occurrence is processed.
+   - ✅ **Implemented:** The import engine builds a `{(type, value): asset}` dictionary from the incoming batch — later entries naturally overwrite earlier ones.
 
 7. **Read Access:** Read operations (`GET`) are unauthenticated, assuming the API sits behind a network boundary. Only write operations require the API key.
+   - ✅ **Implemented:** All `GET` endpoints are open; all `POST`/`PUT`/`DELETE` endpoints are gated by `verify_api_key`.
+   - 🔜 **Evolution planned:** The RBAC system ([#15](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/15)) will introduce a `viewer` role to optionally authenticate read operations per tenant.
 
 ---
 
 ## Remaining Work & Future Scope
 
-The following items from the [Functional Specification](docs/Functional_Specification_and_System_Scope.md) are **not yet implemented** and represent planned next steps:
+All remaining work is tracked as open GitHub issues. Items are organized by priority: **spec compliance first**, then **planned enhancements**.
 
-### Asset Update & Delete Endpoints
+### Open Issues — Spec Compliance & Hardening
 
-- `PUT /api/v1/assets/{id}` — Update an existing asset's fields
-- `DELETE /api/v1/assets/{id}` — Soft-delete (archive) or hard-delete an asset
-- Cascading relationship cleanup on asset deletion (remove all inbound/outbound edges to prevent dangling references)
+These issues address gaps from the [Functional Specification](docs/Functional_Specification_and_System_Scope.md) and security/stability hardening:
 
-### Archived Asset Handling on Re-Import
-
-Per §2.1.2.6 of the functional spec: when a scan re-sights an **archived** asset, the system should **not** silently re-activate it. Instead, it should either require admin approval or raise a notification. Currently, the import engine does not special-case archived assets during re-sighting.
-
-### Incoming Data Scenarios Not Yet Handled
-
-The functional spec defines several ingestion scenarios that require additional implementation:
-
-| Scenario | Spec Reference | Current State |
+| Feature | Issue | Summary |
 |---|---|---|
-| **Archived asset re-sighting** — prevent silent state updates on archived records | §2.1.2 (Rule 6) | ⬜ Not implemented — archived assets are treated like stale assets |
-| **State propagation on graph** — when a parent IP transitions to stale, optionally tag dependent child services for verification | §2.2.2 (Structural Integrity) | ⬜ Not implemented |
-| **Sorting parameter** — allow clients to specify sort field and direction | §2 (Listing) | ⬜ Only `first_seen DESC` is used; no client-configurable sorting |
-| **Conflicting source handling** — merge strategy documentation when the same asset arrives from different sources simultaneously | §2.3.2 | ⬜ Source field is stored but not factored into merge precedence |
+| **Infrastructure & Stability** — DoS payload limits, DB pool tuning, Docker non-root user, dependency pinning, test DB isolation | [#10](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/10) | Harden runtime stability and deployment security |
+| **Validation & Spec Compliance** — Archived asset re-sighting, client-configurable sorting, self-referential relationship prevention, relationship type enum, service banner & certificate SAN validation | [#13](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/13) | Close remaining functional specification gaps |
 
-### Input Validation Gaps
+### Open Issues — Planned Enhancements
 
-Per §3.2 of the functional spec, the following validation strictness items are partially addressed:
+These issues introduce new capabilities beyond the original spec, tracked under a dedicated [Enhancements PRD (#14)](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/14):
+
+| Feature | Issue | Summary | Blocked By |
+|---|---|---|---|
+| **Core Authentication & Tenant Isolation** — `tenant_id` row-level isolation, `api_keys` table with RBAC roles (`admin`/`scanner`/`viewer`), scoped queries | [#15](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/15) | Multi-tenancy foundation | — |
+| **Enhanced Idempotent Ingestion** — Archived asset `Re-sighted` tagging, `seen_by` source tracking, `archived_resighted_count` in response | [#16](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/16) | Ingestion edge-case handling | #15 |
+| **Graph Dependency State Propagation** — `parent-stale` tagging on child assets when parent state changes, `children_tagged_count` in response | [#17](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/17) | Ripple-effect state awareness | #15 |
+| **Performance Guardrails** — Redis caching for `GET /assets`, token-bucket rate limiting per API key, cache invalidation on writes | [#18](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/18) | Production-grade performance | #15 |
+
+### Input Validation Status
+
+Per §3.2 of the functional spec:
 
 | Validation | Status |
 |---|---|
@@ -498,17 +514,9 @@ Per §3.2 of the functional spec, the following validation strictness items are 
 | IPv4/IPv6 validation (RFC 791 / RFC 2460) | ✅ Implemented via Pydantic `IPvAnyAddress` |
 | Service port range (1–65535) + TCP/UDP protocol | ✅ Implemented via model validator |
 | Certificate CN FQDN + ISO-8601 expiry dates | ✅ Implemented via model validator |
-| Service banner sanitization (clean text) | ⬜ Not yet enforced |
-| Certificate SAN validation | ⬜ Not yet enforced |
-
-### Operational & Bonus Features
-
-- **Multi-tenant isolation** — organization-scoped asset segregation (bonus)
-- **Role-based access control (RBAC)** — beyond single API key (bonus)
-- **Asset relationship graph visualization** — visual UI for the graph (bonus)
-- **CI pipeline** — GitHub Actions running tests on push (bonus)
-- **Caching & rate limiting** — performance guardrails (bonus)
-- **LangChain integration** — one Track B AI feature as a bonus (bonus)
+| ILIKE wildcard injection prevention | ✅ Implemented — metacharacters (`%`, `_`, `\`) escaped before query |
+| Service banner sanitization (clean text) | ⬜ Tracked in [#13](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/13) |
+| Certificate SAN validation | ⬜ Tracked in [#13](https://github.com/sara-mohamd/buguard-asset-lifecycle-engine/issues/13) |
 
 ---
 
