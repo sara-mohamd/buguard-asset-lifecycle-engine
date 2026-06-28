@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import TypeAdapter, ValidationError
 from src.database import get_db
-from src.schemas.asset import AssetCreate, AssetResponse, PaginatedAssetResponse
+from src.schemas.asset import AssetCreate, AssetResponse, PaginatedAssetResponse, AssetUpdate
 from src.schemas.relationship import AssetWithNeighborsResponse
 from src.schemas.import_report import ImportReport, RejectedRecord
 from src.services import asset as asset_service
@@ -56,6 +56,28 @@ async def get_asset(asset_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     try:
         asset = await asset_service.get_asset(db=db, asset_id=asset_id)
         return asset
+    except AssetNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+@router.put("/{asset_id}", response_model=AssetResponse, dependencies=[Depends(verify_api_key)])
+async def update_asset(asset_id: uuid.UUID, asset_in: AssetUpdate, db: AsyncSession = Depends(get_db)):
+    """
+    Update an asset's mutable fields.
+    Can be used for soft deletion by updating the status to 'archived'.
+    """
+    try:
+        asset = await asset_service.update_asset(db=db, asset_id=asset_id, asset_in=asset_in)
+        return asset
+    except AssetNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+@router.delete("/{asset_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(verify_api_key)])
+async def delete_asset(asset_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """
+    Hard delete an asset and cascade deletions to its relationships.
+    """
+    try:
+        await asset_service.hard_delete_asset(db=db, asset_id=asset_id)
     except AssetNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 

@@ -136,3 +136,39 @@ async def test_list_assets_filter_value_substring(client: AsyncClient, setup_ass
     assert len(data["items"]) >= 3
     for item in data["items"]:
         assert "test-list" in item["value"].lower()
+
+@pytest.mark.asyncio
+async def test_update_asset(client: AsyncClient):
+    payload = {
+        "type": "domain",
+        "value": "update-test.com",
+    }
+    create_response = await client.post("/api/v1/assets/", json=payload)
+    asset_id = create_response.json()["id"]
+    
+    update_payload = {
+        "status": "archived",
+        "tags": ["updated"]
+    }
+    
+    response = await client.put(f"/api/v1/assets/{asset_id}", json=update_payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "archived"
+    assert "updated" in data["tags"]
+
+@pytest.mark.asyncio
+async def test_delete_asset(client: AsyncClient):
+    payload = {
+        "type": "domain",
+        "value": "delete-test.com",
+    }
+    create_response = await client.post("/api/v1/assets/", json=payload)
+    asset_id = create_response.json()["id"]
+    
+    response = await client.delete(f"/api/v1/assets/{asset_id}")
+    assert response.status_code == 204
+    
+    # Verify it is deleted
+    get_response = await client.get(f"/api/v1/assets/{asset_id}")
+    assert get_response.status_code == 404

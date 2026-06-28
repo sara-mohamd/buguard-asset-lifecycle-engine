@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, Field, AliasChoices, model_validator, IPvAnyAddress, computed_field
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Union, Optional
 from typing_extensions import Annotated, Literal
 from datetime import datetime
 import uuid
@@ -90,6 +90,12 @@ AssetCreate = Annotated[
     Union[DomainAsset, SubdomainAsset, IpAddressAsset, ServiceAsset, CertificateAsset, TechnologyAsset],
     Field(discriminator="type")
 ]
+
+class AssetUpdate(BaseModel):
+    """Schema for updating an existing asset. Identity fields (type, value) cannot be changed."""
+    status: Optional[AssetStatus] = None
+    tags: Optional[List[str]] = None
+    metadata: Optional[Dict[str, Any]] = Field(default=None, validation_alias=AliasChoices("metadata_", "metadata"))
 
 class AssetResponse(AssetBaseCommon):
     id: uuid.UUID

@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import or_, and_, insert, update, func
 
 from src.models.asset import Asset, AssetStatus, AssetRelationship
-from src.schemas.asset import AssetCreate
+from src.schemas.asset import AssetCreate, AssetUpdate
 from src.schemas.relationship import RelationshipCreate
 from src.exceptions import AssetNotFoundError, AssetDuplicateError
 
@@ -255,6 +255,36 @@ async def create_relationship(db: AsyncSession, rel_in: RelationshipCreate) -> A
     await db.refresh(relationship)
     return relationship
 
+async def update_asset(db: AsyncSession, asset_id: uuid.UUID, asset_in: AssetUpdate) -> Asset:
+    """
+    Updates an asset's mutable fields. Can be used for soft-deleting by setting status to archived.
+    """
+    asset = await get_asset(db, asset_id)
+    
+    if asset_in.status is not None:
+        asset.status = asset_in.status if isinstance(asset_in.status, str) else asset_in.status.value
+        
+    if asset_in.tags is not None:
+        normalized_tags = list({tag.strip().lower() for tag in asset_in.tags if tag.strip()})
+        asset.tags = normalized_tags
+        
+    if asset_in.metadata is not None:
+        asset.metadata_ = asset_in.metadata
+        
+    asset.last_seen = datetime.now(timezone.utc)
+    
+    await db.commit()
+    await db.refresh(asset)
+    return asset
+
+async def hard_delete_asset(db: AsyncSession, asset_id: uuid.UUID) -> None:
+    """
+    Physically deletes an asset. Cascading will handle relationships.
+    """
+    asset = await get_asset(db, asset_id)
+    await db.delete(asset)
+    await db.commit()
+
 async def get_asset_with_neighbors(db: AsyncSession, asset_id: uuid.UUID) -> dict:
     """
     Retrieves an asset along with its first-degree graph neighbors.
@@ -264,13 +294,23 @@ async def get_asset_with_neighbors(db: AsyncSession, asset_id: uuid.UUID) -> dic
     
     outbound_query = select(AssetRelationship, Asset).join(
         Asset, AssetRelationship.target_asset_id == Asset.id
-    ).where(AssetRelationship.source_asset_id == asset_id)
+    ).where(
+        and_(
+            AssetRelationship.source_asset_id == asset_id,
+            Asset.status != AssetStatus.archived.value
+        )
+    )
     outbound_result = await db.execute(outbound_query)
     outbound_records = outbound_result.all()
     
     inbound_query = select(AssetRelationship, Asset).join(
         Asset, AssetRelationship.source_asset_id == Asset.id
-    ).where(AssetRelationship.target_asset_id == asset_id)
+    ).where(
+        and_(
+            AssetRelationship.target_asset_id == asset_id,
+            Asset.status != AssetStatus.archived.value
+        )
+    )
     inbound_result = await db.execute(inbound_query)
     inbound_records = inbound_result.all()
     

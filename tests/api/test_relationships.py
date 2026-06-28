@@ -89,3 +89,27 @@ async def test_get_asset_relationships(client: AsyncClient, setup_graph_assets):
     assert neighbor_ip["asset"]["id"] == domain["id"]
     assert neighbor_ip["relationship_type"] == "resolves_to"
     assert neighbor_ip["direction"] == "inbound"
+
+@pytest.mark.asyncio
+async def test_get_asset_relationships_excludes_archived(client: AsyncClient, setup_graph_assets):
+    domain = setup_graph_assets["domain"]
+    ip = setup_graph_assets["ip"]
+    
+    # Create relationship
+    payload = {
+        "source_asset_id": domain["id"],
+        "target_asset_id": ip["id"],
+        "type": "resolves_to"
+    }
+    await client.post("/api/v1/relationships/", json=payload)
+    
+    # Archive the IP
+    await client.put(f"/api/v1/assets/{ip['id']}", json={"status": "archived"})
+    
+    # Fetch domain relationships
+    response_domain = await client.get(f"/api/v1/assets/{domain['id']}/relationships")
+    assert response_domain.status_code == 200
+    data_domain = response_domain.json()
+    
+    # Should not include the archived IP
+    assert len(data_domain["neighbors"]) == 0
