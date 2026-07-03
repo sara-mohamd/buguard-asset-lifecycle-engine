@@ -9,11 +9,12 @@ from src.schemas.relationship import AssetWithNeighborsResponse
 from src.schemas.import_report import ImportReport, RejectedRecord
 from src.services import asset as asset_service
 from src.exceptions import AssetNotFoundError, AssetDuplicateError
-from src.api.deps import verify_api_key
+from src.api.deps import require_role
+from src.schemas.auth import CurrentTenant
 
 router = APIRouter()
 
-@router.get("/", response_model=PaginatedAssetResponse)
+@router.get("/", response_model=PaginatedAssetResponse, dependencies=[Depends(require_role(["admin", "scanner", "viewer"]))])
 async def list_assets(
     limit: int = Query(100, ge=1, le=1000, description="Items per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
@@ -21,13 +22,12 @@ async def list_assets(
     status: Optional[str] = Query(None, description="Filter by asset status"),
     tag: Optional[str] = Query(None, description="Filter by tag"),
     value: Optional[str] = Query(None, description="Filter by substring of value"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_tenant: CurrentTenant = Depends(require_role(["admin", "scanner", "viewer"]))
 ):
-    """
-    List assets with pagination and filtering.
-    """
     items, total = await asset_service.list_assets(
         db=db,
+        tenant_id=current_tenant.tenant_id,
         limit=limit,
         offset=offset,
         type_=type,
@@ -37,67 +37,72 @@ async def list_assets(
     )
     return PaginatedAssetResponse(items=items, total=total)
 
-@router.post("/", response_model=AssetResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(verify_api_key)])
-async def create_asset(asset_in: AssetCreate, db: AsyncSession = Depends(get_db)):
-    """
-    Create a new asset.
-    """
+@router.post("/", response_model=AssetResponse, status_code=status.HTTP_201_CREATED)
+async def create_asset(
+    asset_in: AssetCreate, 
+    db: AsyncSession = Depends(get_db),
+    current_tenant: CurrentTenant = Depends(require_role(["admin", "scanner"]))
+):
     try:
-        asset = await asset_service.create_asset(db=db, asset_in=asset_in)
+        asset = await asset_service.create_asset(db=db, tenant_id=current_tenant.tenant_id, asset_in=asset_in)
         return asset
     except AssetDuplicateError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
 @router.get("/{asset_id}", response_model=AssetResponse)
-async def get_asset(asset_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    """
-    Retrieve an asset by its ID.
-    """
+async def get_asset(
+    asset_id: uuid.UUID, 
+    db: AsyncSession = Depends(get_db),
+    current_tenant: CurrentTenant = Depends(require_role(["admin", "scanner", "viewer"]))
+):
     try:
-        asset = await asset_service.get_asset(db=db, asset_id=asset_id)
+        asset = await asset_service.get_asset(db=db, tenant_id=current_tenant.tenant_id, asset_id=asset_id)
         return asset
     except AssetNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
-@router.put("/{asset_id}", response_model=AssetResponse, dependencies=[Depends(verify_api_key)])
-async def update_asset(asset_id: uuid.UUID, asset_in: AssetUpdate, db: AsyncSession = Depends(get_db)):
-    """
-    Update an asset's mutable fields.
-    Can be used for soft deletion by updating the status to 'archived'.
-    """
+@router.put("/{asset_id}", response_model=AssetResponse)
+async def update_asset(
+    asset_id: uuid.UUID, 
+    asset_in: AssetUpdate, 
+    db: AsyncSession = Depends(get_db),
+    current_tenant: CurrentTenant = Depends(require_role(["admin", "scanner"]))
+):
     try:
-        asset = await asset_service.update_asset(db=db, asset_id=asset_id, asset_in=asset_in)
+        asset = await asset_service.update_asset(db=db, tenant_id=current_tenant.tenant_id, asset_id=asset_id, asset_in=asset_in)
         return asset
     except AssetNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
-@router.delete("/{asset_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(verify_api_key)])
-async def delete_asset(asset_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    """
-    Hard delete an asset and cascade deletions to its relationships.
-    """
+@router.delete("/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_asset(
+    asset_id: uuid.UUID, 
+    db: AsyncSession = Depends(get_db),
+    current_tenant: CurrentTenant = Depends(require_role(["admin"]))
+):
     try:
-        await asset_service.hard_delete_asset(db=db, asset_id=asset_id)
+        await asset_service.hard_delete_asset(db=db, tenant_id=current_tenant.tenant_id, asset_id=asset_id)
     except AssetNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 @router.get("/{asset_id}/relationships", response_model=AssetWithNeighborsResponse)
-async def get_asset_relationships(asset_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    """
-    Retrieve an asset along with its first-degree graph neighbors.
-    """
+async def get_asset_relationships(
+    asset_id: uuid.UUID, 
+    db: AsyncSession = Depends(get_db),
+    current_tenant: CurrentTenant = Depends(require_role(["admin", "scanner", "viewer"]))
+):
     try:
-        data = await asset_service.get_asset_with_neighbors(db=db, asset_id=asset_id)
+        data = await asset_service.get_asset_with_neighbors(db=db, tenant_id=current_tenant.tenant_id, asset_id=asset_id)
         return data
     except AssetNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
-@router.post("/import", response_model=ImportReport, status_code=status.HTTP_200_OK, dependencies=[Depends(verify_api_key)])
-async def import_assets(payload: List[Dict[str, Any]], db: AsyncSession = Depends(get_db)):
-    """
-    Idempotent bulk ingestion endpoint.
-    Processes assets, merging tags and metadata for existing ones, and isolates validation failures.
-    """
+@router.post("/import", response_model=ImportReport, status_code=status.HTTP_200_OK)
+async def import_assets(
+    payload: List[Dict[str, Any]], 
+    db: AsyncSession = Depends(get_db),
+    current_tenant: CurrentTenant = Depends(require_role(["admin", "scanner"]))
+):
     valid_assets = []
     rejected_records = []
     adapter = TypeAdapter(AssetCreate)
@@ -115,7 +120,7 @@ async def import_assets(payload: List[Dict[str, Any]], db: AsyncSession = Depend
                 )
             )
             
-    created, updated = await asset_service.bulk_import_assets(db=db, valid_assets=valid_assets)
+    created, updated = await asset_service.bulk_import_assets(db=db, tenant_id=current_tenant.tenant_id, valid_assets=valid_assets)
     
     return ImportReport(
         total_analyzed=len(payload),

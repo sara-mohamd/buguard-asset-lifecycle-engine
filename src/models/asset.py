@@ -23,6 +23,7 @@ class Asset(Base):
     __tablename__ = "assets"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     type = Column(String, nullable=False, index=True)
     value = Column(String, nullable=False, index=True)
     status = Column(String, nullable=False, default=AssetStatus.active.value)
@@ -35,12 +36,13 @@ class Asset(Base):
     metadata_ = Column("metadata", JSONB, default=dict, nullable=False) # metadata is a reserved attribute in SQLAlchemy Base
 
     __table_args__ = (
-        UniqueConstraint('type', 'value', name='uix_asset_type_value'),
+        UniqueConstraint('tenant_id', 'type', 'value', name='uix_asset_type_value'),
     )
 
 class AssetRelationship(Base):
     __tablename__ = "asset_relationships"
     
+    tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     source_asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="CASCADE"), primary_key=True)
     target_asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="CASCADE"), primary_key=True)
     type = Column(String, nullable=False, primary_key=True)
